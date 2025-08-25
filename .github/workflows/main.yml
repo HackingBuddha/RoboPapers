@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model_name:
-        description: 'hackingbuddha/RoboPapers'
+        description: 'hackingbuddha/robo-papers'
         required: true
 
 jobs:
