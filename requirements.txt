@@ -1,0 +1,9 @@
+# RoboPapers — runtime deps for Replicate Cog + local tests
+torch==2.3.1
+transformers>=4.51.0
+tokenizers>=0.21,<0.22
+accelerate>=0.33.0
+bitsandbytes>=0.43.3
+pydantic>=2.7
+safetensors>=0.4.3
+huggingface-hub>=0.23.0
