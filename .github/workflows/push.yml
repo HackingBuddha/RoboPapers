@@ -1,20 +1,29 @@
+# .github/workflows/push-to-replicate.yml
 name: Push to Replicate
 
 on:
   workflow_dispatch:
     inputs:
       model_name:
-        description: 'hackingbuddha/robo-papers'
+        description: "hackingbuddha/robo-papers"
         required: true
 
 jobs:
   push_to_replicate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Cog
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Setup Cog (auth to Replicate using secret)
         uses: replicate/setup-cog@v2
         with:
-          token: ${{ secrets.REPLICATE_CLI_AUTH_TOKEN }}   # ← your secret
-      - name: Push to Replicate
+          token: ${{ secrets.REPLICATE_CLI_AUTH_TOKEN }} # <-- your repo secret
+
+      # Option A: pass the model name on the command line
+      - name: Push to Replicate (CLI arg)
         run: cog push r8.im/${{ inputs.model_name }}
+
+      # Option B: if you set `image:` inside cog.yaml, you can just run `cog push`
+      # - name: Push to Replicate (from cog.yaml image)
+      #   run: cog push
