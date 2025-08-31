@@ -1,11 +1,12 @@
-"r8.im/<hackingbuddha>/<RoboPapers>"
+image: r8.im/hackingbuddha/robo-papers
+
 build:
-  python_version: "3.10"
-  gpu: true
+  python_version: "3.12"
   python_packages:
     - "torch==2.3.1"
     - "transformers>=4.51.0"
     - "accelerate"
     - "bitsandbytes"
     - "pydantic>=2.7"
+
 predict: "predict.py:Predictor"
