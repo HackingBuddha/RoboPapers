@@ -1,17 +1,14 @@
-# predict.py — RoboPapers (robust JSON, early stop, pydantic v2)
-
 from typing import Optional, List, Dict, Any
 from cog import BasePredictor, Input
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
-from transformers import (
-    AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig,
-    StoppingCriteria, StoppingCriteriaList
-)
-import torch, json, os
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
+import torch
+import json
+import time
 
-MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen3-4B-Instruct-2507")
+MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
 
-# ---------------- Schema ----------------
+# Pydantic Models
 class Benchmark(BaseModel):
     name: str
     split_or_suite: Optional[str] = None
@@ -40,174 +37,247 @@ class Extracted(BaseModel):
     code_url: Optional[HttpUrl] = None
     data_url: Optional[HttpUrl] = None
 
-# ---------------- Prompt (tight length budget) ----------------
-SYSTEM_PROMPT = """You are a senior robotics reviewer.
-Return ONLY JSON matching the schema below. Begin with '{' and end with '}'. Output nothing else.
+# Improved System Prompt with Examples
+SYSTEM_PROMPT = """You are a robotics paper metadata extractor. Extract information from robotics papers and return ONLY a valid JSON object. No additional text.
 
-Rules (hard):
-- Keep each string ≤ 120 characters.
-- results_summary: 3–5 bullets, each must include a number.
-- If unknown: use [] or null. No guesses. No prose outside JSON.
-- Total output ≤ 1800 characters.
+Required JSON format:
+{
+  "title": "Paper title",
+  "venue_year": "ICRA 2024" or "arXiv 2024" or null,
+  "task_type": ["manipulation", "navigation", "locomotion", "aerial", "mobile manipulation", "multi-robot", "planning/control"],
+  "problem_statement": "One sentence describing the problem",
+  "method_keywords": ["keyword1", "keyword2"],
+  "robot_platforms": ["Franka", "UR5", "ANYmal"],
+  "sensors": ["RGB", "depth", "LiDAR"],
+  "actuators": ["7-DoF arm"],
+  "environment": "sim", "real", or "sim-to-real",
+  "benchmarks": [{"name": "Meta-World", "notes": "ML10 tasks"}],
+  "metrics": [{"name": "success rate", "value": "85%", "higher_is_better": true}],
+  "baselines": ["method1", "method2"],
+  "results_summary": ["Result with numbers"],
+  "limitations": ["limitation1"],
+  "code_url": null,
+  "data_url": null
+}
 
-Schema fields:
-- title
-- venue_year (ICRA/IROS/RSS/CoRL year or arXiv year if given)
-- task_type: list from {manipulation, navigation, locomotion, aerial, mobile manipulation, multi-robot, planning/control}
-- problem_statement: one sentence
-- method_keywords: 3–6 (e.g., diffusion policy, MPC, RL, imitation, LfD, visuomotor transformer)
-- robot_platforms: list (Franka, UR5, ANYmal, quadrotor, TurtleBot, etc.)
-- sensors: list (RGB, depth, LiDAR, proprioception, F/T, tactile)
-- actuators: list
-- environment: 'sim', 'real', or 'sim-to-real'; include simulator if named (Isaac, Mujoco, Habitat, Gibson)
-- benchmarks: array of {name, split_or_suite?, notes?}
-- metrics: array of {name, value, higher_is_better?}
-- baselines: list
-- results_summary: 3–5 bullets
-- limitations: 1–4 bullets
-- code_url, data_url: if present
-"""
+EXAMPLE:
+Input: "We present DiffusionPolicy for robotic manipulation using a 7-DoF Franka arm with RGB-D cameras. Our method achieves 94% success on Meta-World ML10 tasks, outperforming Behavior Cloning by 15%. Limitations include poor performance in low-light conditions."
 
-# ---------------- Robust JSON slicer/repair ----------------
-def _first_balanced_json_object(text: str, max_extra_braces: int = 64):
-    """Carve FIRST balanced top-level {...}; if needed, append up to N '}' to balance."""
+Output: {"title": "DiffusionPolicy for Robotic Manipulation", "venue_year": null, "task_type": ["manipulation"], "problem_statement": "We present DiffusionPolicy for robotic manipulation using diffusion models.", "method_keywords": ["diffusion policy", "imitation learning"], "robot_platforms": ["Franka"], "sensors": ["RGB", "depth"], "actuators": ["7-DoF arm"], "environment": "sim", "benchmarks": [{"name": "Meta-World ML10"}], "metrics": [{"name": "success rate", "value": "94%", "higher_is_better": true}], "baselines": ["Behavior Cloning"], "results_summary": ["Achieves 94% success on Meta-World ML10 tasks", "Outperforms Behavior Cloning by 15%"], "limitations": ["Poor performance in low-light conditions"], "code_url": null, "data_url": null}
+
+Return ONLY the JSON object. No explanation."""
+
+def extract_and_repair_json(text: str) -> Optional[Dict]:
+    """Advanced JSON extraction with multiple repair strategies"""
     if "{" not in text:
         return None
-    s = text[text.find("{"):]  # drop any preface
-    def carve(s2):
-        depth, start = 0, None
-        for i, ch in enumerate(s2):
-            if ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                if depth > 0:
-                    depth -= 1
-                    if depth == 0 and start is not None:
-                        return s2[start:i+1]
-        return None
-    # try as-is
-    cand = carve(s)
-    if cand:
+        
+    start_idx = text.find("{")
+    text_from_brace = text[start_idx:]
+    
+    # Strategy 1: Try parsing as-is first
+    try:
+        return json.loads(text_from_brace)
+    except:
+        pass
+    
+    # Strategy 2: Balance braces
+    depth = 0
+    end_idx = None
+    for i, char in enumerate(text_from_brace):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end_idx = i + 1
+                break
+    
+    if end_idx:
+        candidate = text_from_brace[:end_idx]
         try:
-            return json.loads(cand)
-        except Exception:
+            return json.loads(candidate)
+        except:
             pass
-    # try with added braces
-    need = s.count("{") - s.count("}")
-    limit = max(need, 0) if need > 0 else max_extra_braces
-    for k in range(1, limit + 1):
-        cand = carve(s + ("}" * k))
-        if not cand:
-            continue
+    
+    # Strategy 3: Add missing braces
+    brace_count = text_from_brace.count("{") - text_from_brace.count("}")
+    if brace_count > 0:
+        candidate = text_from_brace + "}" * brace_count
         try:
-            return json.loads(cand)
-        except Exception:
-            continue
+            return json.loads(candidate)
+        except:
+            pass
+    
+    # Strategy 4: Try finding last valid closing brace
+    for i in range(len(text_from_brace) - 1, 0, -1):
+        if text_from_brace[i] == "}":
+            candidate = text_from_brace[:i+1]
+            try:
+                return json.loads(candidate)
+            except:
+                continue
+    
     return None
 
-def _coerce_types(d: Dict[str, Any]) -> Dict[str, Any]:
-    # Normalize bool -> str for split_or_suite
+def sanitize_urls(data: Dict) -> Dict:
+    """Convert empty-ish URLs to None for Pydantic validation"""
+    url_fields = ["code_url", "data_url"]
+    for field in url_fields:
+        if field in data and isinstance(data[field], str):
+            val = data[field].strip().lower()
+            if val in ["", "null", "none", "n/a", "na", "not available", "not provided"]:
+                data[field] = None
+        elif field in data and not data[field]:
+            data[field] = None
+    return data
+
+def coerce_types(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Fix type mismatches for Pydantic validation"""
     if isinstance(d, dict) and isinstance(d.get("benchmarks"), list):
         for b in d["benchmarks"]:
             if isinstance(b, dict) and isinstance(b.get("split_or_suite"), bool):
                 b["split_or_suite"] = "true" if b["split_or_suite"] else "false"
-    # Empty URL strings → None (pydantic HttpUrl-safe)
-    for k in ("code_url", "data_url"):
-        v = d.get(k)
-        if isinstance(v, str) and not v.strip():
-            d[k] = None
     return d
 
-class BalancedJSONStop(StoppingCriteria):
-    """Stop generation the moment the top-level JSON object closes."""
-    def __init__(self, tokenizer):
-        self.tok = tokenizer
-        self.depth = 0
-        self.started = False
-    def __call__(self, input_ids, scores, **kwargs):
-        # decode only the last token; works well for Qwen3 tokenization
-        s = self.tok.decode(input_ids[0, -1:], skip_special_tokens=True)
-        for ch in s:
-            if ch == "{":
-                self.started = True
-                self.depth += 1
-            elif ch == "}" and self.started:
-                self.depth -= 1
-                if self.depth == 0:
-                    return True
-        return False
-
-# ---------------- Predictor ----------------
 class Predictor(BasePredictor):
     def setup(self):
-        # Tokenizer (prefer fast)
+        """Load the model and tokenizer"""
+        # Load tokenizer
         try:
-            self.tok = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
-        except Exception:
-            self.tok = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=False)
+            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
+        except Exception as e:
+            print(f"Fast tokenizer failed: {e}. Trying slow tokenizer...")
+            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=False)
 
-        # Prefer bf16 on big GPUs; else 4-bit NF4
-        name_mem = None
+        # Detect GPU capabilities
+        gpu_props = None
         if torch.cuda.is_available():
-            d = torch.cuda.get_device_properties(0)
-            name_mem = (d.name, round(d.total_memory/(1024**3), 2))
-        if name_mem and ("A100" in name_mem[0] or name_mem[1] >= 30):
+            device_props = torch.cuda.get_device_properties(0)
+            gpu_props = (device_props.name, round(device_props.total_memory/(1024**3), 2))
+            print(f"GPU detected: {gpu_props[0]} with {gpu_props[1]}GB memory")
+
+        # Load model with appropriate precision
+        if gpu_props and ("A100" in gpu_props[0] or gpu_props[1] >= 30):
+            print("Using bf16 + TF32 optimization")
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
-            mdl = AutoModelForCausalLM.from_pretrained(
-                MODEL_ID, torch_dtype=torch.bfloat16, device_map="cuda"
+            torch.backends.cudnn.benchmark = True
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID, 
+                torch_dtype=torch.bfloat16, 
+                device_map="cuda"
             )
-            self.mode = "bf16"
+            self.mode = "bf16+TF32"
         else:
-            bnb = BitsAndBytesConfig(
+            print("Using 4-bit quantization")
+            bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_available() else None,
+                bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_available() else None
             )
-            mdl = AutoModelForCausalLM.from_pretrained(
-                MODEL_ID, quantization_config=bnb, device_map="auto"
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID, 
+                quantization_config=bnb_config, 
+                device_map="auto"
             )
             self.mode = "4bit-NF4"
 
-        self.pipe = pipeline("text-generation", model=mdl, tokenizer=self.tok)
-        if getattr(self.pipe.model.config, "pad_token_id", None) is None:
-            self.pipe.model.config.pad_token_id = self.tok.eos_token_id
+        # Create pipeline
+        self.pipeline = pipeline("text-generation", model=model, tokenizer=self.tokenizer)
+        
+        # Set pad token if missing
+        if getattr(self.pipeline.model.config, "pad_token_id", None) is None:
+            self.pipeline.model.config.pad_token_id = self.tokenizer.eos_token_id
 
-        # Deterministic, short budget; stop when JSON closes
-        self.kw = dict(
-            max_new_tokens=320,     # smaller cap → faster & cheaper
-            do_sample=False,
-            return_full_text=False,
-            use_cache=False,
-            eos_token_id=self.tok.eos_token_id,
-            # You can also set max_time to hard-cap a runaway output:
-            # max_time=110,
+        # Generation settings
+        self.generation_kwargs = {
+            "max_new_tokens": 1000,
+            "do_sample": False,
+            "return_full_text": False,
+            "use_cache": False,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "pad_token_id": self.tokenizer.eos_token_id
+        }
+        
+        print(f"Model loaded successfully in {self.mode} mode")
+
+    def predict(
+        self,
+        document: str = Input(
+            description="Paste robotics paper text (abstract, full paper, or key sections)",
+            default=""
         )
-        self.stop = StoppingCriteriaList([BalancedJSONStop(self.tok)])
+    ) -> Dict[str, Any]:
+        """Extract structured metadata from robotics paper text"""
+        
+        if not document.strip():
+            return {"error": "empty_input", "message": "Please provide paper text to analyze"}
 
-    def predict(self,
-                document: str = Input(description="Paste robotics text", default="")) -> Dict[str, Any]:
-
+        # Prepare messages
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": document},
+            {"role": "user", "content": document.strip()}
         ]
-        text_in = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-        with torch.inference_mode():
-            out = self.pipe(text_in, stopping_criteria=self.stop, **self.kw)[0]["generated_text"]
-
-        obj = _first_balanced_json_object(out)
-        if obj is None:
-            # last-ditch: return tail for debugging instead of failing hard
-            return {"error": "no_json_found", "mode": self.mode, "tail": out[-800:]}
-
-        obj = _coerce_types(obj)
+        
+        # Apply chat template
         try:
-            parsed = Extracted.model_validate(obj)         # pydantic v2
-            return parsed.model_dump(mode="json")          # JSON-safe (HttpUrl → str)
+            text_input = self.tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
+        except Exception as e:
+            return {"error": "template_failed", "message": str(e)}
+
+        # Generate response
+        start_time = time.time()
+        try:
+            with torch.inference_mode():
+                output = self.pipeline(text_input, **self.generation_kwargs)[0]["generated_text"]
+        except Exception as e:
+            return {"error": "generation_failed", "message": str(e)}
+        
+        generation_time = round(time.time() - start_time, 2)
+
+        # Extract JSON from output
+        parsed_json = extract_and_repair_json(output)
+        if parsed_json is None:
+            return {
+                "error": "json_extraction_failed",
+                "raw_output": output[:1000],
+                "generation_time": generation_time,
+                "mode": self.mode
+            }
+
+        # Sanitize and validate
+        try:
+            sanitized = sanitize_urls(coerce_types(parsed_json))
+            validated = Extracted.model_validate(sanitized)
+            result = validated.model_dump(mode="json")
+            
+            # Add metadata
+            result["_metadata"] = {
+                "generation_time": generation_time,
+                "mode": self.mode,
+                "success": True
+            }
+            
+            return result
+            
         except ValidationError as e:
-            return {"error": "schema_validation_failed", "detail": str(e)[:600], "raw": obj}
+            return {
+                "error": "validation_failed",
+                "raw_json": parsed_json,
+                "validation_errors": str(e)[:1000],
+                "generation_time": generation_time,
+                "mode": self.mode
+            }
+        except Exception as e:
+            return {
+                "error": "processing_failed", 
+                "message": str(e),
+                "generation_time": generation_time,
+                "mode": self.mode
+            }
