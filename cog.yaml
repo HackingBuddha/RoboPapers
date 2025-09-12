@@ -8,15 +8,15 @@ build:
     - "git"
   
   # Python packages
-  python_packages:
-    - "torch==2.3.1"
-    - "transformers>=4.51.0"
-    - "tokenizers>=0.21,<0.22" 
-    - "accelerate>=0.20.0"
-    - "bitsandbytes>=0.41.0"
-    - "pydantic>=2.7.0"
-    - "safetensors>=0.3.0"
-    - "huggingface-hub>=0.16.0"
+ python_packages:
+  - "torch>=2.3.1,<2.6.0"
+  - "transformers>=4.51.0,<4.55.0"
+  - "tokenizers>=0.21.0"
+  - "accelerate>=0.25.0"
+  - "bitsandbytes>=0.43.0"
+  - "pydantic>=2.8.0,<3.0.0"
+  - "safetensors>=0.4.0"
+  - "huggingface-hub>=0.20.0"
 
 # GPU configuration
 gpu: true
