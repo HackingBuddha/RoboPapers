@@ -2,12 +2,12 @@ build:
   gpu: true
   python_version: "3.12"
   python_packages:
-    - "torch>=2.3.1,<2.6.0"
+    - "torch==2.5.1"
     - "transformers>=4.51.0,<4.55.0"
     - "tokenizers>=0.21.0"
     - "accelerate>=0.25.0"
     - "bitsandbytes>=0.43.0"
-    - "pydantic>=2.8.0,<3.0.0"
+    - "pydantic>=1.10.13,<2.0.0"   # <-- pin v1
     - "safetensors>=0.4.0"
     - "huggingface-hub>=0.20.0"
   run:
