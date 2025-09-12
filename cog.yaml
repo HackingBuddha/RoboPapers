@@ -1,17 +1,17 @@
 build:
   gpu: true
+  cuda: "12.1"            # ← this is what fixes the Cog/Torch mapping error
   python_version: "3.12"
   python_packages:
-    - "torch==2.5.1"
-    - "transformers>=4.51.0,<4.55.0"
-    - "tokenizers>=0.21.0"
-    - "accelerate>=0.25.0"
-    - "bitsandbytes>=0.43.0"
-    - "pydantic>=1.10.13,<2.0.0"   # <-- pin v1
-    - "safetensors>=0.4.0"
-    - "huggingface-hub>=0.20.0"
-  run:
-    - "pip uninstall -y pydantic"
-    - "pip install 'pydantic>=2.8.0,<3.0.0'"
+    - torch==2.4.1
+    - transformers==4.54.1
+    - tokenizers==0.21.4
+    - accelerate==1.10.1
+    - bitsandbytes==0.43.1
+    - pydantic==1.10.22     # ← match Cog’s ecosystem; see Step 2 below
+    - safetensors==0.6.2
+    - huggingface-hub==0.34.4
+    - numpy>=1.24
+    - requests>=2.31
 
 predict: "predict.py:Predictor"
