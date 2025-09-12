@@ -331,3 +331,24 @@ class Predictor(BasePredictor):
                 "generation_time": generation_time,
                 "mode": self.mode
             }
+# --- Pydantic v1/v2 compatibility helpers ---
+def _pd_v2():
+    import pydantic as _pd
+    try:
+        return int(_pd.__version__.split(".")[0]) >= 2
+    except Exception:
+        return False
+
+# later, where you currently do:
+# parsed = Extracted.model_validate(obj)
+# return parsed.model_dump(mode="json")
+
+if _pd_v2():
+    parsed = Extracted.model_validate(obj)        # v2
+    out = parsed.model_dump(mode="json")          # v2
+else:
+    parsed = Extracted.parse_obj(obj)             # v1
+    out = parsed.dict()                           # v1
+
+return out
+
