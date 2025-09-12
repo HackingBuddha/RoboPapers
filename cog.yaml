@@ -1,29 +1,14 @@
-# Replicate cog configuration for RoboPapers
 build:
-  # Base Python version
+  gpu: true
   python_version: "3.12"
-  
-  # System packages (if needed)
-  system_packages:
-    - "git"
-  
-  # Python packages
- python_packages:
-  - "torch>=2.3.1,<2.6.0"
-  - "transformers>=4.51.0,<4.55.0"
-  - "tokenizers>=0.21.0"
-  - "accelerate>=0.25.0"
-  - "bitsandbytes>=0.43.0"
-  - "pydantic>=2.8.0,<3.0.0"
-  - "safetensors>=0.4.0"
-  - "huggingface-hub>=0.20.0"
+  python_packages:
+    - "torch>=2.3.1,<2.6.0"
+    - "transformers>=4.51.0,<4.55.0"
+    - "tokenizers>=0.21.0"
+    - "accelerate>=0.25.0"
+    - "bitsandbytes>=0.43.0"
+    - "pydantic>=2.8.0,<3.0.0"
+    - "safetensors>=0.4.0"
+    - "huggingface-hub>=0.20.0"
 
-# GPU configuration
-gpu: true
-cuda: "12.1"
-
-# Prediction interface
 predict: "predict.py:Predictor"
-
-# Model configuration
-image: "r8.im/cog/cog-base:python3.12-cuda12.1"
