@@ -10,5 +10,8 @@ build:
     - "pydantic>=2.8.0,<3.0.0"
     - "safetensors>=0.4.0"
     - "huggingface-hub>=0.20.0"
+  run:
+    - "pip uninstall -y pydantic"
+    - "pip install 'pydantic>=2.8.0,<3.0.0'"
 
 predict: "predict.py:Predictor"
