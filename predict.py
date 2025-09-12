@@ -142,13 +142,37 @@ def coerce_types(d: Dict[str, Any]) -> Dict[str, Any]:
 
 class Predictor(BasePredictor):
     def setup(self):
-        """Load the model and tokenizer"""
-        # Load tokenizer
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
-        except Exception as e:
-            print(f"Fast tokenizer failed: {e}. Trying slow tokenizer...")
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=False)
+        """Load the model and tokenizer - optimized for caching"""
+        import os
+        
+        # Set cache directory to persistent storage
+        cache_dir = "/src/.cache/huggingface"
+        os.makedirs(cache_dir, exist_ok=True)
+        os.environ["HF_HOME"] = cache_dir
+        os.environ["TRANSFORMERS_CACHE"] = cache_dir
+        
+        print(f"Loading model {MODEL_ID}...")
+        
+        # Load tokenizer with retry logic
+        for attempt in range(3):
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    MODEL_ID, 
+                    use_fast=True,
+                    cache_dir=cache_dir
+                )
+                break
+            except Exception as e:
+                print(f"Tokenizer attempt {attempt+1} failed: {e}")
+                if attempt == 2:  # Last attempt, try slow tokenizer
+                    try:
+                        self.tokenizer = AutoTokenizer.from_pretrained(
+                            MODEL_ID, 
+                            use_fast=False,
+                            cache_dir=cache_dir
+                        )
+                    except Exception as e2:
+                        raise Exception(f"Failed to load tokenizer: {e2}")
 
         # Detect GPU capabilities
         gpu_props = None
@@ -158,50 +182,76 @@ class Predictor(BasePredictor):
             print(f"GPU detected: {gpu_props[0]} with {gpu_props[1]}GB memory")
 
         # Load model with appropriate precision
-        if gpu_props and ("A100" in gpu_props[0] or gpu_props[1] >= 30):
-            print("Using bf16 + TF32 optimization")
+        model_start = time.time()
+        if gpu_props and ("A100" in gpu_props[0] or "H100" in gpu_props[0] or gpu_props[1] >= 40):
+            print("Using bf16 + TF32 optimization for high-end GPU")
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cudnn.benchmark = True
             model = AutoModelForCausalLM.from_pretrained(
                 MODEL_ID, 
                 torch_dtype=torch.bfloat16, 
-                device_map="cuda"
+                device_map="cuda",
+                cache_dir=cache_dir
             )
             self.mode = "bf16+TF32"
         else:
-            print("Using 4-bit quantization")
+            print("Using 4-bit quantization for standard GPU")
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_available() else None
+                bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32
             )
             model = AutoModelForCausalLM.from_pretrained(
                 MODEL_ID, 
                 quantization_config=bnb_config, 
-                device_map="auto"
+                device_map="auto",
+                cache_dir=cache_dir
             )
             self.mode = "4bit-NF4"
+        
+        model_load_time = time.time() - model_start
+        print(f"Model loaded in {model_load_time:.1f}s")
 
         # Create pipeline
-        self.pipeline = pipeline("text-generation", model=model, tokenizer=self.tokenizer)
+        self.pipeline = pipeline(
+            "text-generation", 
+            model=model, 
+            tokenizer=self.tokenizer,
+            device_map="auto"
+        )
         
         # Set pad token if missing
         if getattr(self.pipeline.model.config, "pad_token_id", None) is None:
             self.pipeline.model.config.pad_token_id = self.tokenizer.eos_token_id
+            if hasattr(self.tokenizer, "pad_token_id") and self.tokenizer.pad_token_id is None:
+                self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # Generation settings
         self.generation_kwargs = {
             "max_new_tokens": 1000,
             "do_sample": False,
             "return_full_text": False,
-            "use_cache": False,
+            "use_cache": True,  # Enable caching for faster inference
             "eos_token_id": self.tokenizer.eos_token_id,
-            "pad_token_id": self.tokenizer.eos_token_id
+            "pad_token_id": self.tokenizer.eos_token_id,
+            "temperature": None,  # Avoid temperature warning in greedy mode
+            "top_p": None,       # Avoid top_p warning in greedy mode
         }
         
-        print(f"Model loaded successfully in {self.mode} mode")
+        print(f"Setup complete in {self.mode} mode. Ready for inference.")
+        
+        # Warm up with a test inference to cache everything
+        try:
+            print("Warming up model...")
+            test_msgs = [{"role": "system", "content": "Test"}, {"role": "user", "content": "Hello"}]
+            test_input = self.tokenizer.apply_chat_template(test_msgs, tokenize=False, add_generation_prompt=True)
+            with torch.inference_mode():
+                _ = self.pipeline(test_input, max_new_tokens=10, do_sample=False, return_full_text=False)
+            print("Warmup complete.")
+        except Exception as e:
+            print(f"Warmup failed but continuing: {e}")
 
     def predict(
         self,
