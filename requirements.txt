@@ -1,21 +1,17 @@
-# RoboPapers - Requirements for local development
-torch>=2.3.1,<2.6.0
-transformers>=4.51.0,<4.55.0
-tokenizers>=0.21.0
-accelerate>=0.25.0
-bitsandbytes>=0.43.0
-pydantic>=1.10,<2
-safetensors>=0.4.0
-huggingface-hub>=0.20.0
+# core
+torch==2.3.1           # cu118 wheels available
+transformers==4.54.1
+tokenizers==0.21.4
+safetensors>=0.4.2
+numpy>=1.26,<3
 
-# For development/testing
-jupyter>=1.0.0
-notebook>=7.0.0
-ipywidgets>=8.0.0
+# quantization (4-bit NF4)
+bitsandbytes>=0.43,<0.44
 
-# For API testing
-requests>=2.31.0
+# convenience / model loading
+accelerate>=0.29,<0.33
+huggingface-hub>=0.23
+sentencepiece>=0.1.99
 
-# Additional dependencies that might be needed
-numpy>=1.24.0
-packaging>=21.0
+# keep Cog happy (uses Pydantic v1)
+pydantic>=1.10.7,<2.0
