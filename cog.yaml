@@ -1,17 +1,17 @@
+# Minimal, stable environment for RoboPapers on Replicate
+
 build:
   gpu: true
-  cuda: "12.1"            # ← this is what fixes the Cog/Torch mapping error
+  cuda: "11.8"          # pinned so Cog knows what to use with Torch 2.3.x
   python_version: "3.12"
   python_packages:
-    - torch==2.4.1
+    - torch==2.3.1
     - transformers==4.54.1
-    - tokenizers==0.21.4
-    - accelerate==1.10.1
-    - bitsandbytes==0.43.1
-    - pydantic==1.10.22     # ← match Cog’s ecosystem; see Step 2 below
-    - safetensors==0.6.2
-    - huggingface-hub==0.34.4
-    - numpy>=1.24
+    - accelerate>=0.29.0,<1.0.0
+    - bitsandbytes>=0.43,<0.48
+    - pydantic>=2.8,<3.0
+    - safetensors>=0.4.0
+    - sentencepiece>=0.1.99
     - requests>=2.31
 
 predict: "predict.py:Predictor"
