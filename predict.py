@@ -340,7 +340,26 @@ def _pd_v2():
         return False
 
 # later, where you currently do:
-# parsed = Extracted.model_validate(obj)
+# # --- begin compat helpers ---
+def _pydantic_parse(model_cls, data):
+    """Works on Pydantic v1 and v2."""
+    # v2: BaseModel.model_validate
+    if hasattr(model_cls, "model_validate"):
+        return model_cls.model_validate(data)
+    # v1: BaseModel.parse_obj
+    return model_cls.parse_obj(data)
+
+def _pydantic_to_dict(model_instance):
+    """Works on Pydantic v1 and v2."""
+    if hasattr(model_instance, "model_dump"):   # v2
+        return model_instance.model_dump()
+    return model_instance.dict()                # v1
+# --- end compat helpers ---
+
+# use it where you validate/serialize:
+parsed = _pydantic_parse(Extracted, obj)
+return _pydantic_to_dict(parsed)
+
 # return parsed.model_dump(mode="json")
 
 if _pd_v2():
